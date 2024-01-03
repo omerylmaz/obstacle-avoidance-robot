@@ -1,75 +1,89 @@
 #!/usr/bin/env python3
-#  -*- coding: utf-8 -*-
+import rospy
+from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
-import rospy, math, time
+from std_msgs.msg import Empty
+import time
+import random
 
-#Publishers
 vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+takeoff_pub = rospy.Publisher('/takeoff', Empty, queue_size=1)
 rospy.init_node('move_tea_distributor', anonymous=False)
 
-def enviar_velocidad(vx,vy,vz,vaz):
-    vel_msg = Twist()
-    vel_msg.linear.x = float(vx)
-    vel_msg.linear.y = float(vy)
-    vel_msg.linear.z = float(vz)
-    vel_msg.angular.z = float(vaz)
-    vel_msg.angular.x = float(0.0)
-    vel_msg.angular.y = float(0.0)
-    vel_pub.publish(vel_msg)
+obstacle_detected = False
+turning = False
 
-def hover_pub():
-    enviar_velocidad(0.0,0.0,0.0,0.0)
+def enviar_velocidad(vx, vy, vz, vaz):
+    global obstacle_detected, turning
+    turn_direction = -1
+    if obstacle_detected:
+        if not turning:
+            turning = True
+            # turn_direction = random.choice([-1, 1])
+            rospy.logwarn("Obstacle detected! Turning...")
+            vel_msg = Twist()
+            vel_msg.angular.z = 0.5 * turn_direction
+            vel_pub.publish(vel_msg)
+            time.sleep(2) 
+            vel_msg.angular.z = 0.0
+            vel_pub.publish(vel_msg)
+            rospy.loginfo("Turn complete. Scanning for open space...")
+        else:
+            vel_msg = Twist()
+            vel_msg.angular.z = 0.1 * turn_direction
+            vel_pub.publish(vel_msg)
+            time.sleep(2) 
+            vel_msg.angular.z = 0.0
+            vel_pub.publish(vel_msg)
+            rospy.loginfo("yanlış ellerdesin bro...")
+    else:
+        turning = False
+        rospy.loginfo("No obstacle detected. Moving forward...")
+        vel_msg = Twist()
+        vel_msg.linear.x = float(vx)
+        vel_msg.linear.y = float(vy)
+        vel_msg.linear.z = float(vz)
+        vel_msg.angular.z = float(vaz)
+        vel_pub.publish(vel_msg)
 
-def takeoff_fun():
-    takeoff_pub.publish(Empty())
+def scan_callback(data):
+    global obstacle_detected
+    center_index = len(data.ranges) // 2 
+    angle_range = 30 
 
-def up_fun():
-    vel_msg = Twist()
-    vel_msg.linear.z = float(1.0)
-    vel_pub.publish(vel_msg)
+    min_index = center_index - angle_range
+    max_index = center_index + angle_range
+    center_ranges = data.ranges[min_index:max_index]
 
-def down_fun():
-    vel_msg = Twist()
-    vel_msg.linear.z = float(-1.0)
-    vel_pub.publish(vel_msg)
+    filtered_ranges = [distance for distance in center_ranges if distance > 0.1]
+    if not filtered_ranges:
+        return
 
-def forward_fun():
-    vel_msg = Twist()
-    vel_msg.linear.x = float(1.0)
-    vel_pub.publish(vel_msg)
+    range_ahead = min(filtered_ranges)
+    rospy.loginfo(f"Closest valid obstacle distance: {range_ahead} meters")
 
-def backward_fun():
-    vel_msg = Twist()
-    vel_msg.linear.x = float(-1.0)
-    vel_pub.publish(vel_msg)
+    if range_ahead < 2.0:
+        obstacle_detected = True
+    else:
+        obstacle_detected = False
 
-def right_fun():
-    vel_msg = Twist()
-    vel_msg.linear.y = float(-1.0)
-    vel_pub.publish(vel_msg)
+scan_sub = rospy.Subscriber('/scan', LaserScan, scan_callback)
 
-def left_fun():
-    vel_msg = Twist()
-    vel_msg.linear.y = float(1.0)
-    vel_pub.publish(vel_msg)
+def takeoff_sequence():
+    rospy.loginfo("Starting takeoff...")
+    enviar_velocidad(0, 0, 1, 0)
+    time.sleep(5)
+    enviar_velocidad(0, 0, 0, 0)
+    rospy.loginfo("Takeoff complete.")
 
-def cw_fun():
-    vel_msg = Twist()
-    vel_msg.angular.z = float(-1.0)
-    vel_pub.publish(vel_msg)
-
-def ccw_fun():
-    vel_msg = Twist()
-    vel_msg.angular.z = float(1.0)
-    vel_pub.publish(vel_msg)
-
-while True:
+def movement_sequence():
+    rospy.loginfo("Starting movement...")
+    enviar_velocidad(0, 0, 1, 0)
     time.sleep(1)
-    up_fun()
-    time.sleep(1)
-    hover_pub()
-    time.sleep(1)
-    forward_fun()
-    time.sleep(1)
-    hover_pub()
-    
+    while not rospy.is_shutdown():
+        enviar_velocidad(1, 0, 0, 0)
+        time.sleep(1)
+
+if __name__ == '__main__':
+    takeoff_sequence()
+    movement_sequence()
